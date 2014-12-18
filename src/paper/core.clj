@@ -79,8 +79,8 @@
          (paper-pos p2 p2-x p2-y p2-z)
          (fd/!= p1-z p2-z))))
 
-;; Or they can be above or below each other
-(defn above [p1 p2]
+;; Or they can be over or under each other
+(defn over [p1 p2]
   (all (paper p1)
        (paper p2)
        (!= p1 p2)
@@ -90,7 +90,7 @@
          (paper-pos p2 p2-x p2-y p2-z)
          (fd/> p1-z p2-z))))
 
-(defn below [p1 p2]
+(defn under [p1 p2]
   (all (paper p1)
        (paper p2)
        (!= p1 p2)
@@ -193,3 +193,126 @@
     (conde
      [(at-rest p) (== z z-rest)]
      [(raised p) (fd/+ z-rest 6 z)])))
+
+;; ## Layout
+;; ### Arranging paper
+
+;; Seams are created when two sheets of paper share the full length of a
+;; common edge. Sheets joined by a seam generally move together.
+(defn seem [p1 p2]
+  (all (paper p1)
+       (paper p2)
+       (!= p1 p2)
+       (fresh [p1-x p1-y p1-z
+               p1-w p1-h p1-d
+               p2-x p2-y p2-z
+               p2-w p2-h p2-d]
+         (paper-dims p1 p1-w p1-h p1-d)
+         (paper-dims p2 p2-w p2-h p2-d)
+         (paper-pos p1 p1-x p1-y p1-z)
+         (paper-pos p2 p2-x p2-y p2-z)
+         (fd/== p1-z p2-z)
+         (conde
+          [(fd/== p1-x p2-x) (fd/== p1-w p2-w) (fresh [p1-y+h]
+                                                 (fd/+ p1-y p1-h p1-y+h)
+                                                 (fd/== p1-y+h p2-y))]
+          [(fd/== p1-y p2-y) (fd/== p1-h p2-h) (fresh [p1-x+w]
+                                                 (fd/+ p1-x p1-w p1-x+w)
+                                                 (fd/== p1-x+w p2-x))]))))
+
+;; ### Devices
+;; MOVE ME
+(db-rel device d type)
+
+;; 56 dp on mobile and 64 dp on desktop
+(defn row-height [d h]
+  (fresh [t]
+    (device d t)
+    (conde
+     [(== :mobile) (fd/== h 54)]
+     [(== :tablet) (fd/== h 54)]
+     [(== :desktop) (fd/== h 64)])))
+
+(defn valid-row-height [d h]
+  (fresh [height-inc step]
+    (row-height d height-inc)
+    (fd/* height-inc step h)))
+
+;; ### Paper toolbars
+
+;; A toolbar is a strip of paper used to present actions.
+;;
+;; Toolbars sit at the top a can be off-screren or on-screen
+;;
+;; Toolbars have a standard height, 56 dp on mobile and 64 dp on
+;; desktop, but they can be taller. When taller, the actions can be
+;; pinned to either the top or the bottom of the toolbar.
+(defn toolbar [device p]
+  (fresh [x y z
+          h w d
+          row-h]
+    (device d)
+    (valid-row-height device h)
+    (paper-pos p x y z)
+    (paper-dims p w h d)
+    (fd/<= y 0)
+    (fd/== x 0)))
+
+;; ## Baseline grids
+
+;; All components align to an 8dp square baseline grid. Type aligns to a
+;; 4dp baseline grid. Iconography in toolbars align to a 4dp square
+;; baseline grid. This applies to mobile, tablet, and desktop.
+(defn component-snap [x]
+  (fresh [m]
+    (fd/* 8 m x)))
+
+(defn type-snap
+  (fresh [m]
+    (fd/* 4 m x)))
+
+;; ## Keylines and spacing
+
+;; ### Horizontal keylines
+(defn margin [d m]
+  (fresh [t]
+    (device d t)
+    (cond [(== t :mobile) (fd/== m 16)]
+          [(== t :tablet) (fd/== m 24)]
+          [(== t :desktop) (fd/== m 24)]))) ; TODO check screen size
+                                            ; instead for desktop
+(defn associated-content [d m]
+  (fresh [t]
+    (device d t)
+    (cond [(== t :mobile) (fd/== m 72)]
+          [(== t :tablet) (fd/== m 80)]
+          [(== t :desktop) (fd/== m 80)])))
+
+(defn floating-action [d m]
+  (fresh [t]
+    (device d t)
+    (cond [(== t :mobile) (fd/== m 32)]
+          [(== t :tablet) (fd/== m 24)]
+          [(== t :desktop) (fd/== m 24)])))
+
+(defn side-menu-margin
+  (fresh [t]
+    (device d t)
+    (cond [(== t :mobile) (fd/== m 56)]
+          [(== t :tablet)]
+          [(== t :desktop)])))
+
+;; ### Ratio keylines
+;; TODO
+
+;; ### Incremental keylines
+;; TODO
+
+;; ### Touch targets
+;; The minimum touch target size is 48dp.
+(defn touch-target [p]
+  (paper p)
+  (fresh [w h d]
+    (paper-dims p w h d)
+    (fd/>= w 48)
+    (fd/>= h 48)))
