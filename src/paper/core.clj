@@ -6,7 +6,7 @@
 
 ;; ### Devices
 ;; Each device has a type
-(db-rel device d type)
+(db-rel device d)
 
 ;; A pixel depth
 (db-rel pixel-depth d depth)
@@ -20,6 +20,10 @@
     (device d)
     (pixel-depth d px-depth)
     (fd/* pixel-depth dp px)))
+
+;; We need axis to place out objects
+(defn axis [x y z]
+  (fd/in x y z (fd/interval -10000 10000)))
 
 ;; ## Material design
 
@@ -145,6 +149,9 @@
 ;; have one or more children
 (db-rel contains container object)
 
+;; It has no parents
+(db-rel base-object object)
+
 ;; Materials may be at rest or raised
 (db-rel at-rest p)
 (db-rel raised p)
@@ -160,6 +167,21 @@
     (conde
      [(at-rest p) (== z z-rest)]
      [(raised p) (fd/+ z-rest 6 z)])))
+
+;; All positions are relative to the sheet they live on, sometimes we may need the absolute value
+(defn absolute-pos [p x y z]
+  (fresh [p-x p-y p-z]
+    (paper-pos p p-x p-z p-z)
+    (conde [(fresh [c c-x c-y c-z]
+              (contains c p)
+              (absolute-pos c c-x c-z c-z)
+              (fd/+ p-x c-x x)
+              (fd/+ p-y c-y y)
+              (fd/+ p-z c-z z))]
+           [(base-object p)
+            (fd/== x p-x)
+            (fd/== y p-y)
+            (fd/== z p-z)])))
 
 ;; Multiple material elements cannot occupy the same point in space simultaneously.
 ;;
@@ -214,12 +236,11 @@
 ;; pinned to either the top or the bottom of the toolbar.
 ;; 56 dp on mobile and 64 dp on desktop
 (defn bar-height [d h]
-  (fresh [t]
-    (device d t)
-    (conde
-     [(== :mobile) (fd/== h 54)]
-     [(== :tablet) (fd/== h 54)]
-     [(== :desktop) (fd/== h 64)])))
+  (device d)
+  (conde
+   [(== d :mobile) (fd/== h 54)]
+   [(== d :tablet) (fd/== h 54)]
+   [(== d :desktop) (fd/== h 64)]))
 
 (defn valid-bar-height [d h]
   (fresh [height-inc step]
@@ -254,32 +275,28 @@
 
 ;; ### Horizontal keylines
 (defn margin [d m]
-  (fresh [t]
-    (device d t)
-    (conde [(== t :mobile) (fd/== m 16)]
-           [(== t :tablet) (fd/== m 24)]
-           [(== t :desktop) (fd/== m 24)]))) ; TODO check screen size
+  (device d)
+  (conde [(== d :mobile) (fd/== m 16)]
+         [(== d :tablet) (fd/== m 24)]
+         [(== d :desktop) (fd/== m 24)])) ; TODO check screen size
                                             ; instead for desktop
 (defn associated-content [d m]
-  (fresh [t]
-    (device d t)
-    (conde [(== t :mobile) (fd/== m 72)]
-           [(== t :tablet) (fd/== m 80)]
-           [(== t :desktop) (fd/== m 80)])))
+  (device d)
+  (conde [(== d :mobile) (fd/== m 72)]
+         [(== d :tablet) (fd/== m 80)]
+         [(== d :desktop) (fd/== m 80)]))
 
 (defn floating-action [d m]
-  (fresh [t]
-    (device d t)
-    (conde [(== t :mobile) (fd/== m 32)]
-           [(== t :tablet) (fd/== m 24)]
-           [(== t :desktop) (fd/== m 24)])))
+  (device d)
+  (conde [(== d :mobile) (fd/== m 32)]
+         [(== d :tablet) (fd/== m 24)]
+         [(== d :desktop) (fd/== m 24)]))
 
 (defn side-menu-margin [d m]
-  (fresh [t]
-    (device d t)
-    (conde [(== t :mobile) (fd/== m 56)]
-           [(== t :tablet) (fd/>= m 0)]
-           [(== t :desktop) (fd/>= m 0)])))
+  (device d)
+  (conde [(== d :mobile) (fd/== m 56)]
+         [(== d :tablet) (fd/>= m 0)]
+         [(== d :desktop) (fd/>= m 0)]))
 
 ;; ### Ratio keylines
 ;; TODO
@@ -296,4 +313,52 @@
          (fd/>= w 48)
          (fd/>= h 48))))
 
-;; We can check if an
+;; ## Visibility
+;; A sheet is visible if its absolute position and size is in the screen
+(defn visible [d p]
+  (fresh [d-w d-h d-d
+          p-x p-y p-z
+          p-w p-h p-d]
+    (screen d d-w d-h d-d)
+    (absolute-pos p p-x p-y p-z)
+    (paper-dims p p-w p-h p-d)
+    (fd/<= p-z d-d)
+    (fresh [p-x+w p-y+h]
+      (fd/+ p-x p-w p-x+w)
+      (fd/+ p-y p-h p-y+h)
+      (fd/< p-x d-w)
+      (fd/< 0 p-x+w)
+      (fd/< p-y d-h)
+      (fd/< 0 p-y+h))))
+
+;; A sheet is on the screen is it fits completely onto the screen
+(defn on-screen [d p]
+  (fresh [d-w d-h d-d
+          p-x p-y p-z
+          p-w p-h p-d]
+    (screen d d-w d-h d-d)
+    (absolute-pos p p-x p-y p-z)
+    (paper-dims p p-w p-h p-d)
+    (trace-lvars :on-screen p-d)
+    (fd/<= p-z d-d)
+    (fresh [p-x+w p-y+h]
+      (fd/+ p-x p-w p-x+w)
+      (fd/+ p-y p-h p-y+h)
+      (fd/<= p-x+w d-w)
+      (fd/<= 0 p-x)
+      (fd/<= p-y+h d-h)
+      (fd/<= 0 p-y))))
+
+(with-db
+  (db [base-object :nav] [paper :nav] [device :mobile] [pixel-depth :mobile 1] [screen :mobile 800 600 10])
+  (run 1 [p
+          x y z
+          w h pd]
+    (fresh [d]
+      (device d)
+      (axis x y z)
+      (axis w h pd)
+      (paper p)
+      (paper-dims p w h pd)
+      (paper-pos p x y z)
+      (on-screen d p))))
