@@ -4,6 +4,23 @@
             [clojure.core.logic.pldb :refer :all]
             [clojure.core.logic.fd :as fd]))
 
+;; ### Devices
+;; Each device has a type
+(db-rel device d type)
+
+;; A pixel depth
+(db-rel pixel-depth d depth)
+
+;; A screen which represents the from surface
+(db-rel screen d w h d)
+
+;; We can use the depth to move between px and dp
+(defn pixel [d px dp]
+  (fresh [px-depth]
+    (device d)
+    (pixel-depth d px-depth)
+    (fd/* pixel-depth dp px)))
+
 ;; ## Material design
 
 ;; In material design everything is made up from paper and ink
@@ -123,51 +140,10 @@
            (fd/< p1-y p2-y+h)
            (fd/< p2-y p1-y+h)))))
 
-;; One can be inside another
-(defn inside [p1 p2]
-  (all (paper p1)
-       (paper p2)
-       (!= p1 p2)
-       (fresh [p1-x p1-y p1-z
-               p1-w p1-h p1-d
-               p2-x p2-y p2-z
-               p2-w p2-h p2-d]
-         (paper-dims p1 p1-w p1-h p1-d)
-         (paper-dims p2 p2-w p2-h p2-d)
-         (paper-pos p1 p1-x p1-y p1-z)
-         (paper-pos p2 p2-x p2-y p2-z)
-         (fresh [p1-x+w p1-y+h p2-x+w p2-y+h]
-           (fd/+ p1-x p1-w p1-x+w)
-           (fd/+ p1-y p1-h p1-y+h)
-           (fd/+ p2-x p2-w p2-x+w)
-           (fd/+ p2-y p2-h p2-y+h)
-           (fd/>= p1-x p2-x)
-           (fd/>= p2-x+w p1-x+w)
-           (fd/>= p1-y p2-y)
-           (fd/>= p2-y+h p1-y+h)))))
-
-;; Multiple material elements cannot occupy the same point in space simultaneously.
-;;
-;; In physics this is the Pauli exclusion principle
-(defn pauli [p1 p2]
-  (conde
-   [(== p1 p2)]
-   [(intersect p1 p2) (different-plane p1 p2)]
-   [(!intersect p1 p2)]))
-
 ;; Containers and the objects they contain have a parent-child
 ;; relationship. Every object has a single parent, and may or may not
 ;; have one or more children
-(db-rel parent container object)
-
-;; Or it can be the root
-(db-rel root object)
-
-;; Objects can be placed on a container
-(defn on-container [container object]
-  (all (parent container object)
-       (above object container)
-       (inside object container)))
+(db-rel contains container object)
 
 ;; Materials may be at rest or raised
 (db-rel at-rest p)
@@ -176,23 +152,30 @@
 ;; They also have a rest elevation
 (db-rel rest-elevation p z)
 
-;; If they live on a container they are raised to the height of the container
-(defn rest-z [p z]
-  (fresh [parent z-rest]
-    (rest-elevation p z-rest)
-    (conde [(on-container parent p) (fresh [c-x c-y c-z]
-                                      (paper-pos c-x c-y c-z)
-                                      (fd/+ c-z z-rest z))]
-           [(root p) (z-rest z)])))
-
 ;; At rest paper adopts its rest elevation, if raised it it moves up by 6dp
 (defn elevation [p z]
   (fresh [x y z-rest]
     (paper-pos p x y z)
-    (rest-z p z-rest)
+    (rest-elevation p z-rest)
     (conde
      [(at-rest p) (== z z-rest)]
      [(raised p) (fd/+ z-rest 6 z)])))
+
+;; Multiple material elements cannot occupy the same point in space simultaneously.
+;;
+;; In physics this is the Pauli exclusion principle
+(defn pauli [p1 p2]
+  (conde
+   [(== p1 p2)]
+   [(fresh [c]
+      (contains c p1)
+      (contains c p2)
+      (conde [(intersect p1 p2) (different-plane p1 p2)]
+             [(!intersect p1 p2)]))]
+   [(fresh [c1 c2]
+      (contains c1 p1)
+      (contains c2 p2)
+      (!= c1 c2))]))
 
 ;; ## Layout
 ;; ### Arranging paper
@@ -220,24 +203,6 @@
                                                  (fd/+ p1-x p1-w p1-x+w)
                                                  (fd/== p1-x+w p2-x))]))))
 
-;; ### Devices
-;; MOVE ME
-(db-rel device d type)
-
-;; 56 dp on mobile and 64 dp on desktop
-(defn row-height [d h]
-  (fresh [t]
-    (device d t)
-    (conde
-     [(== :mobile) (fd/== h 54)]
-     [(== :tablet) (fd/== h 54)]
-     [(== :desktop) (fd/== h 64)])))
-
-(defn valid-row-height [d h]
-  (fresh [height-inc step]
-    (row-height d height-inc)
-    (fd/* height-inc step h)))
-
 ;; ### Paper toolbars
 
 ;; A toolbar is a strip of paper used to present actions.
@@ -247,12 +212,26 @@
 ;; Toolbars have a standard height, 56 dp on mobile and 64 dp on
 ;; desktop, but they can be taller. When taller, the actions can be
 ;; pinned to either the top or the bottom of the toolbar.
+;; 56 dp on mobile and 64 dp on desktop
+(defn bar-height [d h]
+  (fresh [t]
+    (device d t)
+    (conde
+     [(== :mobile) (fd/== h 54)]
+     [(== :tablet) (fd/== h 54)]
+     [(== :desktop) (fd/== h 64)])))
+
+(defn valid-bar-height [d h]
+  (fresh [height-inc step]
+    (bar-height d height-inc)
+    (fd/* height-inc step h)))
+
 (defn toolbar [device p]
   (fresh [x y z
           h w d
           row-h]
     (device d)
-    (valid-row-height device h)
+    (valid-bar-height device h)
     (paper-pos p x y z)
     (paper-dims p w h d)
     (fd/<= y 0)
@@ -267,7 +246,7 @@
   (fresh [m]
     (fd/* 8 m x)))
 
-(defn type-snap
+(defn type-snap [x]
   (fresh [m]
     (fd/* 4 m x)))
 
@@ -277,30 +256,30 @@
 (defn margin [d m]
   (fresh [t]
     (device d t)
-    (cond [(== t :mobile) (fd/== m 16)]
-          [(== t :tablet) (fd/== m 24)]
-          [(== t :desktop) (fd/== m 24)]))) ; TODO check screen size
+    (conde [(== t :mobile) (fd/== m 16)]
+           [(== t :tablet) (fd/== m 24)]
+           [(== t :desktop) (fd/== m 24)]))) ; TODO check screen size
                                             ; instead for desktop
 (defn associated-content [d m]
   (fresh [t]
     (device d t)
-    (cond [(== t :mobile) (fd/== m 72)]
-          [(== t :tablet) (fd/== m 80)]
-          [(== t :desktop) (fd/== m 80)])))
+    (conde [(== t :mobile) (fd/== m 72)]
+           [(== t :tablet) (fd/== m 80)]
+           [(== t :desktop) (fd/== m 80)])))
 
 (defn floating-action [d m]
   (fresh [t]
     (device d t)
-    (cond [(== t :mobile) (fd/== m 32)]
-          [(== t :tablet) (fd/== m 24)]
-          [(== t :desktop) (fd/== m 24)])))
+    (conde [(== t :mobile) (fd/== m 32)]
+           [(== t :tablet) (fd/== m 24)]
+           [(== t :desktop) (fd/== m 24)])))
 
-(defn side-menu-margin
+(defn side-menu-margin [d m]
   (fresh [t]
     (device d t)
-    (cond [(== t :mobile) (fd/== m 56)]
-          [(== t :tablet)]
-          [(== t :desktop)])))
+    (conde [(== t :mobile) (fd/== m 56)]
+           [(== t :tablet) (fd/>= m 0)]
+           [(== t :desktop) (fd/>= m 0)])))
 
 ;; ### Ratio keylines
 ;; TODO
@@ -311,8 +290,10 @@
 ;; ### Touch targets
 ;; The minimum touch target size is 48dp.
 (defn touch-target [p]
-  (paper p)
-  (fresh [w h d]
-    (paper-dims p w h d)
-    (fd/>= w 48)
-    (fd/>= h 48)))
+  (all (paper p)
+       (fresh [w h d]
+         (paper-dims p w h d)
+         (fd/>= w 48)
+         (fd/>= h 48))))
+
+;; We can check if an
